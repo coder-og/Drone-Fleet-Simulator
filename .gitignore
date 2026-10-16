@@ -22,3 +22,13 @@
 # virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
 hs_err_pid*
 replay_pid*
+
+# Portable build / local run output
+build/
+build-core/
+target/
+run/
+__pycache__/
+.venv/
+*.vcd
+*.vcxproj.user

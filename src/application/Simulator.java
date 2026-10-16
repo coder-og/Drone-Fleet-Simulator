@@ -4,7 +4,7 @@ import java.io.File;
 import java.io.FileNotFoundException;
 import java.util.*;
 
-public class Simulator {
+public class Simulator implements AutoCloseable {
 
     private List<Drone> drones = new ArrayList<>();
     private CommunicationModule comm;
@@ -53,7 +53,7 @@ public class Simulator {
             System.out.println("Initialized " + drones.size() + " drones.");
 
         } catch (FileNotFoundException e) {
-            System.err.println("Config file not found in root directory.");
+            throw new IllegalStateException("Run from the directory containing config.txt", e);
         }
     }
 
@@ -69,6 +69,10 @@ public class Simulator {
             for (Drone d : drones) logger.record(d);
         }
     }
+
+    public double getTimeStep() { return dt; }
+
+    @Override public void close() { if (logger != null) logger.close(); }
 
     public List<Drone> getDrones() { return this.drones; }
 }

@@ -1,188 +1,69 @@
-# Autonomous Drone Fleet Coordination Simulator
+# Drone Fleet Simulator
 
-A Java simulation of multiple quadrotor drones operating as autonomous agents in a shared 3D environment, coordinating through consensus-based formation control while avoiding collisions and exchanging state over a range-limited, lossy communication channel.
+Java/JavaFX coursework simulation of a fleet travelling to a target, spraying for ten simulated seconds, and returning. It combines a mission state machine, simplified translational dynamics, neighbor-based cohesion, collision repulsion, and a 3D view.
 
-Built as a Complex Engineering Problem (CEP) for an Object-Oriented Programming course.
+## Run
 
----
+Install **JDK 17** and **Maven 3.8+**, then run from this repository root:
 
-## Problem
+```sh
+mvn clean compile
+mvn javafx:run
+```
 
-Fleets of drones are increasingly deployed for precision crop monitoring, mapping, and spraying. Coordinating them in the field is expensive and risky — a control bug means damaged hardware. Simulation lets coordination algorithms be tested before anything flies.
+The entry point is `application.Main`, which initializes the fleet before launching `DroneGUI`. Do not launch `DroneGUI` directly. Maven downloads JavaFX; the GUI needs a desktop display and graphics support. Close the window to stop and flush the CSV log.
 
-This project models the collective behaviour of a drone fleet where each drone is an independent autonomous agent: it computes its own control inputs, decides its own motion from local neighbour information, and shares state only with drones inside its communication radius. There is no central commander issuing per-drone instructions.
+## Architecture
 
-## Design
-
-The system is modular, with each class corresponding to one physical or computational concern. This separation is the point of the exercise — control logic, physical dynamics, coordination rules, and data recording are independently replaceable.
-
-| Class | Responsibility |
+| Source | Responsibility |
 |---|---|
-| `Simulator` | Numerical engine — manages time, integrates all drone states, synchronises communication and logging |
-| `Drone` | One quadrotor: physical parameters and dynamic response to applied forces |
-| `Controller` | PD control law converting position/velocity error into thrust and torque |
-| `FormationManager` | Consensus-based coordination from neighbour positions and velocities |
-| `CollisionAvoidance` | Repulsive potential field preventing inter-drone overlap |
-| `CommunicationModule` | Range-limited, probabilistically lossy state exchange |
-| `Environment` | Spatial boundaries and boundary-condition enforcement |
-| `Logger` | State recording and performance metric computation |
+| `Main.java` | GO → SPRAY → RETURN → DONE; directly adjusts horizontal velocity |
+| `Simulator.java` | Loads config, finds neighbors, computes forces, advances physics and logs |
+| `Controller.java` | Vertical thrust from position/velocity error and gravity compensation |
+| `Drone.java`, `DroneState.java`, `Vector3D.java` | State, forces, vector operations and integration |
+| `FormationManager.java` | Position/velocity consensus force |
+| `CommunicationModule.java` | Range-limited neighbor selection with random packet loss |
+| `CollisionAvoidance.java` | Repulsion within a minimum separation threshold |
+| `Environment.java` | Position bounds and velocity clamping |
+| `DroneGUI.java` | JavaFX view, mission timing and spray particles |
+| `Logger.java` | Position, velocity and thrust CSV |
 
-## Simulation Loop
+Forces are computed before drones are integrated. Velocity is updated before position (semi-implicit Euler). The GUI mission clock uses the configured physics timestep, not wall-clock time.
 
-The simulation advances in discrete time steps of Δt. Each step:
+## Configuration
 
-1. `Controller` computes thrust and desired attitude for target trajectories
-2. `Drone` applies control inputs to its dynamic model, deriving acceleration and angular velocity
-3. `FormationManager` adjusts behaviour from neighbour states to hold formation
-4. `CollisionAvoidance` applies repulsive forces where drones approach each other
-5. `CommunicationModule` exchanges state among drones in range, subject to packet loss
-6. `Simulator` integrates translational and rotational motion for all drones
-7. `Logger` records positions, velocities, thrusts, and communication events
+`config.txt` is read from the working directory.
 
-All drones are updated simultaneously within a step, keeping kinematic and dynamic state consistent.
+| Key | Included value | Meaning |
+|---|---:|---|
+| `numDrones` | 5 | Fleet size |
+| `timeStep` | 0.1 | Simulated seconds per step |
+| `width`, `height` | 100 | Horizontal environment dimensions |
+| `mass` | 1.2 | Mass per drone |
+| `kd` | 0.1 | Linear drag coefficient |
 
-## Mathematical Model
+The existing `kp` entry is **not read**. Controller gains, communication range (18), packet-loss probability (0.2), target location and spray duration are currently source constants.
 
-### Translational dynamics
+## Output and verification
 
-Newton's second law, with forces from gravity, thrust, drag, collision avoidance, and formation control:
+`positions.csv` is overwritten on each launch. It has `DroneID,PosX,PosY,PosZ,VelX,VelY,VelZ,ThrustZ`; rows are grouped by step and contain no timestamp. Save previous logs before rerunning. `saveFinalMetrics()` exists but is not called by the normal GUI path; it does not measure collisions or communication success.
 
-```
-m·a = m·g + R·T + F_aero + F_rep + F_form
-```
+Run the focused physics checks without opening a window:
 
-where `R` is the body-to-world rotation matrix, `T = [0, 0, T_z]ᵀ` the net thrust in body frame, and `g = [0, 0, −9.81]ᵀ`. Aerodynamic drag is linear in velocity:
-
-```
-F_aero = −k_d · v
-```
-
-Integration is explicit Euler:
-
-```
-v(t+Δt) = v(t) + a(t)·Δt
-p(t+Δt) = p(t) + v(t+Δt)·Δt
+```sh
+mvn compile
+javac -cp target/classes -d target/test-classes tests/CoreChecks.java
+java -cp target/classes:target/test-classes application.CoreChecks
 ```
 
-### Rotational dynamics
+On Windows use `;` instead of `:` in the last classpath. CI compiles the GUI and runs these checks. They verify hover gravity compensation and a vector operation, not full mission stability.
 
-Euler's rotational equation, with the gyroscopic cross-product term:
+## Model limits
 
-```
-ω̇ = I⁻¹ (τ − ω × (I·ω))
-R(t+Δt) = R(t) · Exp(ω·Δt)
-```
+- This is a teaching simulator, not a flight controller or validated UAV dynamics model.
+- Horizontal mission motion is assigned by `Main`, rather than produced by tilt/attitude control.
+- `Drone.integrate()` updates orientation using angular velocity but does not integrate angular acceleration from torque/inertia. Full rotational dynamics are not implemented.
+- Random packet loss is unseeded. Failed neighbor discovery also removes a drone from collision-repulsion inputs; avoidance is not guaranteed.
+- No measured accuracy, collision-free guarantee, or hardware performance is claimed.
 
-`I` is the inertia tensor. The rotation matrix is updated on the manifold via the exponential map rather than by adding angles, which avoids drift and gimbal issues.
-
-### Control
-
-Position and velocity error drive a PD law with gravity compensation:
-
-```
-e_p = p_desired − p_actual
-e_v = v_desired − v_actual
-
-a_cmd = k_p^ctrl · e_p + k_d^ctrl · e_v + g
-```
-
-Commanded acceleration becomes an inertial thrust vector, rotated into the body frame, from which the vertical component is extracted:
-
-```
-T_inertial = m · a_cmd
-T_body     = Rᵀ · T_inertial
-T_z        = T_body,z
-```
-
-Attitude is regulated by torque:
-
-```
-τ = k_R (R_target − R) + k_ω (ω_target − ω)
-```
-
-### Formation control
-
-Each drone adjusts toward its neighbours' positions and velocities — a second-order consensus law over the set `N_i` of drones within communication range:
-
-```
-F_form,i = − Σ_{j ∈ N_i} [ k_p^form (p_i − p_j) + k_v^form (v_i − v_j) ]
-```
-
-The position term aligns relative geometry; the velocity term equalises speeds so the group moves cohesively rather than oscillating.
-
-**Note on notation:** the controller gains `k_p^ctrl`, `k_d^ctrl` and the formation weights `k_p^form`, `k_v^form` are distinct quantities despite similar naming. They are separately named in the source.
-
-### Collision avoidance
-
-Repulsion grows without bound as drones converge:
-
-```
-F_rep,i = Σ_{j ∈ N_i} k_rep · (p_i − p_j) / ‖p_i − p_j‖²
-```
-
-### Communication
-
-A pair of drones can exchange state only if within range, and each attempt may fail:
-
-```
-connected:  ‖p_i − p_j‖ < R_comm
-delivered:  rand() > p_loss
-```
-
-Because formation and avoidance both depend on neighbour state, packet loss degrades coordination — which is the realistic behaviour being modelled, not a defect.
-
-### Boundaries
-
-Drones are constrained to the operational area:
-
-```
-p_x, p_y ∈ [0, width] × [0, height]
-```
-
-On reaching a boundary, velocity is reflected or the drone repositioned in bounds.
-
-## Performance Metrics
-
-```
-Average spacing        =  1/(N(N−1)) · Σ_{i,j} ‖p_i − p_j‖
-Collision count        =  | { (i,j) : ‖p_i − p_j‖ < d_min } |
-Comm. success rate     =  successful messages / total messages
-```
-
-Together these measure coordination quality, safety, and communication robustness.
-
-## Building and Running
-
-Requires a JDK (17 or later) and JavaFX for the graphical view.
-
-```
-1. Import the project into your IDE, or compile from the command line
-2. Ensure the JavaFX SDK is on the module path if running the GUI
-3. Run the Simulator entry point
-```
-
-Simulation parameters — drone count, Δt, environment dimensions, drone
-physical constants, control gains — are read from `config.txt` at startup.
-Editing that file changes the scenario without recompiling, which keeps runs
-reproducible and parameters traceable.
-
-## Output
-
-| File | Contents |
-|---|---|
-| `positions.csv` | Per-timestep position, velocity, and thrust for every drone |
-| `metrics.txt` | Final performance summary |
-
-A sample `positions.csv` is included. Larger mission logs are regenerated by
-running the simulator and are not committed.
-
-## Model Sources
-
-The model combines established formulations rather than implementing a single paper:
-
-- **Quadrotor dynamics** — Mahony, R., Kumar, V. & Corke, P. (2012). "Multirotor Aerial Vehicles: Modeling, Estimation, and Control of Quadrotor." *IEEE Robotics & Automation Magazine* 19(3): 20–32.
-- **PD position control with gravity compensation** — Mellinger, D. & Kumar, V. (2011). "Minimum snap trajectory generation and control for quadrotors." *IEEE ICRA*, pp. 2520–2525.
-- **Consensus formation control** — Olfati-Saber, R. & Murray, R.M. (2004). "Consensus problems in networks of agents with switching topology and time-delays." *IEEE Transactions on Automatic Control* 49(9): 1520–1533. See also Olfati-Saber, R. (2006). "Flocking for multi-agent dynamic systems: algorithms and theory." *IEEE Transactions on Automatic Control* 51(3): 401–420.
-- **Artificial potential field avoidance** — Khatib, O. (1986). "Real-Time Obstacle Avoidance for Manipulators and Mobile Robots." *International Journal of Robotics Research* 5(1): 90–98.
-- **Combined consensus formation with potential-field avoidance for quadrotors** — Kuriki, Y. & Namerikawa, T. (2014). "Consensus-based cooperative formation control with collision avoidance for a multi-UAV system." *2014 American Control Conference*, pp. 2077–2082.
-- **Behavioural antecedent** — Reynolds, C.W. (1987). "Flocks, herds, and schools: A distributed behavioral model." *SIGGRAPH '87*.
+The included project PDFs provide coursework context. A real GUI recording and measured mission results remain useful additions.
