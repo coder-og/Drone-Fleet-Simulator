@@ -41,7 +41,7 @@ public class Controller {
         Vector3D a_cmd =
             ep.multiply(kp_pos)
               .add(ev.multiply(kv_vel))
-              .add(s.getGravity());  // gravity compensation
+              .subtract(s.getGravity());  // gravity compensation
 
         // 3. Vertical thrust 
         double Tz = s.mass * a_cmd.z;

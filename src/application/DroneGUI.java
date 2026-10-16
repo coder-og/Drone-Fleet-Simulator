@@ -62,7 +62,7 @@ public class DroneGUI extends Application {
         }
 
         // HUD (time + Δt) - overlay label
-        Label hud = new Label("t = 0.00 s   Δt = " + String.format("%.3f", Main.DT) + " s");
+        Label hud = new Label("t = 0.00 s   Δt = " + String.format("%.3f", simulator.getTimeStep()) + " s");
         hud.setTextFill(Color.WHITESMOKE);
         hud.setStyle("-fx-background-color: rgba(0,0,0,0.45); -fx-padding: 8; -fx-background-radius: 8;");
         hud.setTranslateX(15);
@@ -102,7 +102,7 @@ public class DroneGUI extends Application {
                 if (now - lastUpdate >= 16_000_000) { // ~60 FPS
 
                     // Simulation time based on Δt
-                    double tSec = frameCount * Main.DT;
+                    double tSec = frameCount * simulator.getTimeStep();
 
                     // Update mission phases (GO -> SPRAY 10s -> RETURN), then step physics
                     Main.updateMission(tSec, drones);
@@ -112,7 +112,7 @@ public class DroneGUI extends Application {
                     updateVisuals(frameCount);
 
                     // Update HUD
-                    hud.setText(String.format("t = %.2f s     Δt = %.3f s", tSec, Main.DT));
+                    hud.setText(String.format("t = %.2f s     Δt = %.3f s", tSec, simulator.getTimeStep()));
 
                     lastUpdate = now;
                     frameCount++;
@@ -121,6 +121,9 @@ public class DroneGUI extends Application {
         };
         timer.start();
     }
+
+    @Override
+    public void stop() { if (simulator != null) simulator.close(); }
 
     // --- VISUALIZATION HELPERS ---
 
